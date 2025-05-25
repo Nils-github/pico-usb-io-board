@@ -49,7 +49,7 @@ struct dln2_adc_get_all_vals {
 
 static repeating_timer_t dln2_adc_event_timer;
 
-static uint16_t dln2_adc_read(uint input)
+static uint16_t dln2_adc_read(uint16_t input)
 {
     adc_select_input(input);
     // The Linux driver has a fixed 10-bit resolution
@@ -96,7 +96,7 @@ static bool dln2_adc_enable(struct dln2_slot *slot, bool enable)
 
     if (!enable) {
         cancel_repeating_timer(&dln2_adc_event_timer);
-        for (uint pin = 26; pin <= 28; pin++)
+        for (uint16_t pin = 26; pin <= 28; pin++)
             dln2_pin_free(pin, DLN2_MODULE_ADC);
     }
 
@@ -136,7 +136,7 @@ static bool dln2_adc_channel_get_all_val(struct dln2_slot *slot)
     put_unaligned_le16(0x0000, channel_mask);
 
     // Sample time: 3x 2us ~= 6us
-    for (uint i = 0; i < DLN2_ADC_NUM_CHANNELS; i++) {
+    for (uint16_t i = 0; i < DLN2_ADC_NUM_CHANNELS; i++) {
         values[i] = dln2_adc_read(i);
     }
 

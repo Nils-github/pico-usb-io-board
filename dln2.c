@@ -67,7 +67,7 @@ static void dln2_slots_init(void)
     dln2_slot_out = NULL;
     dln2_slot_in = NULL;
 
-    for (uint i = 0; i < DLN2_MAX_SLOTS; i++) {
+    for (uint32_t i = 0; i < DLN2_MAX_SLOTS; i++) {
         struct dln2_slot *slot = &dln2_slots[i];
         slot->index = i;
         slot->len = 0;
@@ -85,7 +85,7 @@ static const char *dln2_handle_names[] = {
     [DLN2_HANDLE_ADC] = "ADC",
 };
 
-void _dln2_print_slot(struct dln2_slot *slot, uint indent, const char *caller)
+void _dln2_print_slot(struct dln2_slot *slot, uint32_t indent, const char *caller)
 {
     struct dln2_header *hdr = dln2_slot_header(slot);
 
@@ -242,7 +242,7 @@ static bool dln2_handle_ctrl(struct dln2_slot *slot)
         if (len)
             return dln2_response_error(slot, DLN2_RES_INVALID_COMMAND_SIZE);
         pico_get_unique_board_id(&board_id);
-        for (uint i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
+        for (uint16_t i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
             serial <<= 8;
             serial |= board_id.id[i];
         }

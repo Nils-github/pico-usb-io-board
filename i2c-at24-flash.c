@@ -65,7 +65,7 @@ static void flash_print_header(const struct at24_flash_header *hdr)
 {
     uint8_t pad_zero = 0;
 
-    for (uint i = 0; i < sizeof(hdr->pad_zero); i++)
+    for (uint16_t i = 0; i < sizeof(hdr->pad_zero); i++)
         pad_zero |= hdr->pad_zero[i];
 
     LOG1("%u: magic=%s wear=%llu version=%llu address=0x%02x pad_zero=%s checksum=%u\n",
@@ -80,11 +80,11 @@ static const void *flash_address(uint32_t flash_offs)
 
 static uint16_t flash_header_checksum(const struct at24_flash_header *hdr)
 {
-    uint len = sizeof(*hdr) - sizeof(uint16_t);
+    uint16_t len = sizeof(*hdr) - sizeof(uint16_t);
     uint8_t *buf = (uint8_t *)hdr;
     uint16_t sum = 0;
 
-    for (uint i = 0; i < len; i++)
+    for (uint16_t i = 0; i < len; i++)
         sum += buf[i];
     return sum;
 }
@@ -100,7 +100,7 @@ static bool flash_is_valid_sector(const struct at24_flash_sector *sector)
     if (!hdr->wear || !hdr->version)
         return false;
 
-    for (uint i = 0; i < sizeof(hdr->pad_zero); i++)
+    for (uint16_t i = 0; i < sizeof(hdr->pad_zero); i++)
         pad_zero |= hdr->pad_zero[i];
     if (pad_zero)
         return false;
@@ -156,7 +156,7 @@ static uint32_t find_free_flash_sector(uint64_t *wear)
 
     // It's safe to reuse write_sector here
     uint16_t *addresses = (uint16_t *)&write_sector;
-    unsigned int num_addresses = 0;
+    uint32_t num_addresses = 0;
 
     // Find all i2c addresses in use
     flash_for_each_sector(flash_offs, 0) {
@@ -166,7 +166,7 @@ static uint32_t find_free_flash_sector(uint64_t *wear)
         //flash_print_header(&sector->header);
 
         bool found = false;
-        for (uint i = 0; i < num_addresses; i++) {
+        for (uint32_t i = 0; i < num_addresses; i++) {
             if (addresses[i] == hdr->address) {
                 found = true;
                 break;
@@ -181,7 +181,7 @@ static uint32_t find_free_flash_sector(uint64_t *wear)
     uint32_t min_wear_flash_offs = 0;
 
     // Find the sector with the least wear
-    for (uint i = 0; i < num_addresses; i++) {
+    for (uint32_t i = 0; i < num_addresses; i++) {
         uint64_t version = 0;
 
         LOG1("  try address: 0x%02x\n", addresses[i]);

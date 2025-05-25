@@ -150,7 +150,7 @@ static bool dln2_gpio_pin_enable(struct dln2_slot *slot, bool enable)
         if (res)
             return dln2_response_error(slot, res);
 
-        enum gpio_function fn = gpio_get_function(pin);
+        gpio_function_t fn = gpio_get_function(pin);
         LOG1("    gpio_get_function=%u\n", fn);
 
         if (pin != LED_PIN) {
@@ -362,7 +362,7 @@ static void dln2_gpio_irq_callback(uint gpio, uint32_t events)
     assign_bit(gpio, prev_values, value);
     dln2_gpio_event_count++;
 
-    uint i;
+    uint16_t i;
     for (i = 0; i < DLN2_GPIO_MAX_EVENTS; i++) {
         if (!dln2_gpio_events[i].events)
             break;

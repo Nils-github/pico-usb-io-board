@@ -34,8 +34,8 @@ static struct dln2_i2c_device **dln2_i2c_devices;
 static bool dln2_i2c_enable(struct dln2_slot *slot, bool enable)
 {
     uint8_t *port = dln2_slot_header_data(slot);
-    uint scl = PICO_DEFAULT_I2C_SCL_PIN;
-    uint sda = PICO_DEFAULT_I2C_SDA_PIN;
+    uint16_t scl = PICO_DEFAULT_I2C_SCL_PIN;
+    uint16_t sda = PICO_DEFAULT_I2C_SDA_PIN;
     int res;
 
     LOG1("    %s: port=%u enable=%u\n", __func__, *port, enable);
