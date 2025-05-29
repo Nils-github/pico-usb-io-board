@@ -122,9 +122,11 @@ static void cdc_write_bytes(uint8_t itf)
     if (!uart_count)
         return;
 
+#ifdef PICO_DEFAULT_LED_PIN
     // Light up the onboard LED as an RX FIFO overflow warning
     if (uart_count == 32)
         gpio_put(PICO_DEFAULT_LED_PIN, 1);
+#endif
 
     cdc_count = tud_cdc_n_write(itf, buf, uart_count);
     if (cdc_count)
