@@ -1,6 +1,6 @@
 # Pico USB I/O Board
 
-This project turns the Waveshare RP2040 Zero the Raspberry Pi Pico into a USB I/O Board.
+This project turns the Waveshare RP2040 Zero or the Raspberry Pi Pico into a USB I/O Board.
 
 It implements the USB protocol used by the dln2 Linux drivers and in addition it supports 2 CDC UARTS.
 
