@@ -42,6 +42,8 @@
 #define DLN2_GPIO_EVENT_CHANGE          1
 #define DLN2_GPIO_EVENT_LVL_HIGH        2
 #define DLN2_GPIO_EVENT_LVL_LOW         3
+#define DLN2_GPIO_EVENT_CHANGE_RISING	0x11
+#define DLN2_GPIO_EVENT_CHANGE_FALLING  0x21
 
 #define DLN2_GPIO_NUM_PINS  29
 
@@ -50,18 +52,6 @@
 #else
   #define LED_PIN   0xff    // out of bounds value that will never match
 #endif
-
-#define get_bit(n, var)     ((var >> (n)) & 1U)
-
-#define assign_bit(n, var, val)     \
-    do{                             \
-        if (val)                    \
-            (var) |= 1U << (n);     \
-        else                        \
-            (var) &= ~(1U << (n));  \
-    } while (0)
-
-static uint32_t prev_values;
 
 struct dln2_gpio_event {
     uint8_t gpio;
@@ -77,6 +67,8 @@ struct dln2_gpio_settings {
 #define FLAG_OPEN_DRAIN        2
 #define FLAG_PULL_UP           3
 #define FLAG_PULL_DOWN         4
+#define FLAG_USED_AS_IRQ       5
+    uint8_t irq_type;
 };
 
 struct dln2_gpio_settings settings[DLN2_GPIO_NUM_PINS];
@@ -222,24 +214,34 @@ static bool dln2_gpio_pin_set_event_cfg(struct dln2_slot *slot)
     if (cmd->pin == LED_PIN)
         return dln2_response_error(slot, DLN2_RES_INVALID_VALUE);
 
-    assign_bit(cmd->pin, prev_values, gpio_get(cmd->pin));
-
     switch (cmd->type) {
     case DLN2_GPIO_EVENT_NONE:
         gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_LEVEL_LOW | GPIO_IRQ_LEVEL_HIGH | GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, false);
+        settings[cmd->pin].irq_type = 0;
         break;
     // The Linux driver always uses this so we don't know which edge(s) it actually cares about.
     case DLN2_GPIO_EVENT_CHANGE:
         gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true);
+        settings[cmd->pin].irq_type = GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE;
         break;
     // The Linux driver doesn't use these, maybe because they were mistaken to be only level
     // interrupts, but with period=0 they are actually edge interrupts according to the docs:
     // http://dlnware.com/dll/DLN_GPIO_EVENT_LEVEL_HIGH-Events
     case DLN2_GPIO_EVENT_LVL_HIGH:
-        gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_EDGE_RISE, true);
+        gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_LEVEL_HIGH, true);
+        settings[cmd->pin].irq_type = GPIO_IRQ_LEVEL_HIGH;
         break;
     case DLN2_GPIO_EVENT_LVL_LOW:
+        gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_LEVEL_LOW, true);
+        settings[cmd->pin].irq_type = GPIO_IRQ_LEVEL_LOW;
+        break;
+    case DLN2_GPIO_EVENT_CHANGE_RISING:
+        gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_EDGE_RISE, true);
+        settings[cmd->pin].irq_type = GPIO_IRQ_EDGE_RISE;
+        break;
+    case DLN2_GPIO_EVENT_CHANGE_FALLING:
         gpio_set_irq_enabled(cmd->pin, GPIO_IRQ_EDGE_FALL, true);
+        settings[cmd->pin].irq_type = GPIO_IRQ_EDGE_FALL;
         break;
     default:
         return dln2_response_error(slot, DLN2_RES_INVALID_EVENT_TYPE);
@@ -410,38 +412,34 @@ static void dln2_gpio_irq_callback(uint gpio, uint32_t events)
     if (gpio >= DLN2_GPIO_NUM_PINS)
         return;
 
-    bool prev_value = get_bit(gpio, prev_values);
     bool value;
 
-    if (events == (GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE))
-        value = gpio_get(gpio);
-    else if (events == GPIO_IRQ_EDGE_FALL)
+    if (events == GPIO_IRQ_EDGE_FALL)
         value = 0;
     else if (events == GPIO_IRQ_EDGE_RISE)
+        value = 1;
+    else if (events == GPIO_IRQ_LEVEL_LOW)
+        value = 0;
+    else if (events == GPIO_IRQ_LEVEL_HIGH)
         value = 1;
     else
         return;
 
-    if (events == (GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE))
-        LOG2("B");
-    else if (events == GPIO_IRQ_EDGE_FALL)
-        LOG2("F");
+    if (events == GPIO_IRQ_EDGE_FALL)
+        LOG2("F\n");
     else if (events == GPIO_IRQ_EDGE_RISE)
-        LOG2("R");
+        LOG2("R\n");
+    else if (events == GPIO_IRQ_LEVEL_LOW)
+        LOG2("L\n");
+    else if (events == GPIO_IRQ_LEVEL_HIGH)
+        LOG2("H\n");
     else {
         LOG2("N\n");
         return;
     }
 
-    LOG1("%s: gpio=%u events=0x%x value=%u prev_value=%u %s\n",
-         __func__, gpio, events, value, prev_value, prev_value == value ? "SKIP" : "");
+    LOG1("%s: gpio=%u events=0x%x value=%u\n", __func__, gpio, events, value);
 
-    if (prev_value == value) {
-        LOG2(" X\n");
-        return;
-    }
-
-    assign_bit(gpio, prev_values, value);
     dln2_gpio_event_count++;
 
     uint16_t i;
