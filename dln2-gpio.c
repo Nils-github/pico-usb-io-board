@@ -30,7 +30,13 @@
 #define DLN2_GPIO_PIN_DISABLE           DLN2_GPIO_CMD(0x11)
 #define DLN2_GPIO_PIN_SET_DIRECTION     DLN2_GPIO_CMD(0x13)
 #define DLN2_GPIO_PIN_GET_DIRECTION     DLN2_GPIO_CMD(0x14)
+#define DLN2_GPIO_PIN_OPENDRAIN_ENABLE  DLN2_GPIO_CMD(0x15)
+#define DLN2_GPIO_PIN_OPENDRAIN_DISABLE DLN2_GPIO_CMD(0x16)
+#define DLN2_GPIO_PIN_PULLUP_ENABLE     DLN2_GPIO_CMD(0x18)
+#define DLN2_GPIO_PIN_PULLUP_DISABLE    DLN2_GPIO_CMD(0x19)
 #define DLN2_GPIO_PIN_SET_EVENT_CFG     DLN2_GPIO_CMD(0x1E)
+#define DLN2_GPIO_PIN_PULLDOWN_ENABLE   DLN2_GPIO_CMD(0x20)
+#define DLN2_GPIO_PIN_PULLDOWN_DISABLE  DLN2_GPIO_CMD(0x21)
 
 #define DLN2_GPIO_EVENT_NONE            0
 #define DLN2_GPIO_EVENT_CHANGE          1
@@ -63,9 +69,25 @@ struct dln2_gpio_event {
     uint8_t value;
 };
 
+struct dln2_gpio_settings {
+    uint8_t gpio;
+    uint16_t flags;
+/* flag symbols are bit numbers */
+#define FLAG_IS_OUTPUT         1
+#define FLAG_OPEN_DRAIN        2
+#define FLAG_PULL_UP           3
+#define FLAG_PULL_DOWN         4
+};
+
+struct dln2_gpio_settings settings[DLN2_GPIO_NUM_PINS];
+
 #define DLN2_GPIO_MAX_EVENTS    32
 static struct dln2_gpio_event dln2_gpio_events[DLN2_GPIO_MAX_EVENTS];
 uint16_t dln2_gpio_event_count;
+
+#define BIT_SET(flags, flagnr) flags |= (1 << flagnr)
+#define BIT_CLEAR(flags, flagnr) flags &= (~(1 << flagnr))
+#define BIT_CHECK(flags, flagnr) ((flags >> flagnr) & 0x01)
 
 static const char *dln2_gpio_id_to_name(uint16_t id)
 {
@@ -90,8 +112,20 @@ static const char *dln2_gpio_id_to_name(uint16_t id)
         return "GPIO_PIN_SET_DIRECTION";
     case DLN2_GPIO_PIN_GET_DIRECTION:
         return "GPIO_PIN_GET_DIRECTION";
+    case DLN2_GPIO_PIN_OPENDRAIN_ENABLE:
+        return "GPIO_PIN_OPENDRAIN_ENABLE";
+    case DLN2_GPIO_PIN_OPENDRAIN_DISABLE:
+        return "GPIO_PIN_OPENDRAIN_DISABLE";
+    case DLN2_GPIO_PIN_PULLUP_ENABLE:
+        return "GPIO_PIN_PULLUP_ENABLE";
+    case DLN2_GPIO_PIN_PULLUP_DISABLE:
+        return "GPIO_PIN_PULLUP_DISABLE";
     case DLN2_GPIO_PIN_SET_EVENT_CFG:
         return "GPIO_PIN_SET_EVENT_CFG";
+    case DLN2_GPIO_PIN_PULLDOWN_ENABLE:
+        return "GPIO_PIN_PULLDOWN_ENABLE";
+    case DLN2_GPIO_PIN_PULLDOWN_DISABLE:
+        return "GPIO_PIN_PULLDOWN_DISABLE";
     }
     return NULL;
 }
@@ -155,7 +189,7 @@ static bool dln2_gpio_pin_enable(struct dln2_slot *slot, bool enable)
 
         if (pin != LED_PIN) {
             gpio_init(pin);
-            gpio_pull_down(pin); // Some other function could have changed this (adc)
+            gpio_disable_pulls(pin); // default to no-pull
         }
     } else {
         int res = dln2_pin_free(pin, DLN2_MODULE_GPIO);
@@ -237,6 +271,12 @@ bool dln2_handle_gpio(struct dln2_slot *slot)
         return dln2_gpio_response_pin_val(slot, pin, &val);
     case DLN2_GPIO_PIN_SET_OUT_VAL:
         DLN2_GPIO_GET_PIN_VERIFY(slot, pin, &val);
+        if (BIT_CHECK(settings[pin].flags, FLAG_OPEN_DRAIN)) {
+            if (val == 0) {  // prevent glitch while switching
+                gpio_put(pin, val);
+            }
+            gpio_set_oeover(pin, 0x3 - val);
+        }
         gpio_put(pin, val);
         return dln2_gpio_response_pin_val(slot, pin, NULL);
     case DLN2_GPIO_PIN_GET_OUT_VAL:
@@ -251,14 +291,56 @@ bool dln2_handle_gpio(struct dln2_slot *slot)
         DLN2_GPIO_GET_PIN_VERIFY(slot, pin, &val);
         if (pin == LED_PIN && !val)
             return dln2_response_error(slot, DLN2_RES_INVALID_VALUE);
+        if (val == 0) {
+            BIT_CLEAR(settings[pin].flags, FLAG_IS_OUTPUT);
+            BIT_CLEAR(settings[pin].flags, FLAG_PULL_UP);
+            BIT_CLEAR(settings[pin].flags, FLAG_PULL_DOWN);
+        } else if (val == 1) {
+            BIT_SET(settings[pin].flags, FLAG_IS_OUTPUT);
+            BIT_SET(settings[pin].flags, FLAG_OPEN_DRAIN);
+            gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_4MA);
+        }
         gpio_set_dir(pin, val);
         return dln2_gpio_response_pin_val(slot, pin, NULL);
     case DLN2_GPIO_PIN_GET_DIRECTION:
         DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
         val = gpio_get_dir(pin);
         return dln2_gpio_response_pin_val(slot, pin, &val);
+    case DLN2_GPIO_PIN_OPENDRAIN_ENABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        BIT_SET(settings[pin].flags, FLAG_OPEN_DRAIN);
+        gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_4MA);
+        gpio_set_oeover(pin, 0x2);
+        gpio_put(pin, true); // set default high == disabled
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
+    case DLN2_GPIO_PIN_OPENDRAIN_DISABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        BIT_CLEAR(settings[pin].flags, FLAG_OPEN_DRAIN);
+        gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_4MA);
+        gpio_set_oeover(pin, 0x3);
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
+    case DLN2_GPIO_PIN_PULLUP_ENABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        BIT_SET(settings[pin].flags, FLAG_PULL_UP);
+        gpio_set_pulls(pin, true, BIT_CHECK(settings[pin].flags, FLAG_PULL_DOWN));
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
+    case DLN2_GPIO_PIN_PULLUP_DISABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        BIT_CLEAR(settings[pin].flags, FLAG_PULL_UP);
+        gpio_set_pulls(pin, false, BIT_CHECK(settings[pin].flags, FLAG_PULL_DOWN));
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
     case DLN2_GPIO_PIN_SET_EVENT_CFG:
         return dln2_gpio_pin_set_event_cfg(slot);
+    case DLN2_GPIO_PIN_PULLDOWN_ENABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        BIT_SET(settings[pin].flags, FLAG_PULL_DOWN);
+        gpio_set_pulls(pin, BIT_CHECK(settings[pin].flags, FLAG_PULL_UP), true);
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
+    case DLN2_GPIO_PIN_PULLDOWN_DISABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        BIT_CLEAR(settings[pin].flags, FLAG_PULL_DOWN);
+        gpio_set_pulls(pin, BIT_CHECK(settings[pin].flags, FLAG_PULL_UP), false);
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
     default:
         LOG1("GPIO command not supported: 0x%04x\n", hdr->id);
         return dln2_response_error(slot, DLN2_RES_COMMAND_NOT_SUPPORTED);
