@@ -34,6 +34,8 @@
 #define DLN2_GPIO_PIN_OPENDRAIN_DISABLE DLN2_GPIO_CMD(0x16)
 #define DLN2_GPIO_PIN_PULLUP_ENABLE     DLN2_GPIO_CMD(0x18)
 #define DLN2_GPIO_PIN_PULLUP_DISABLE    DLN2_GPIO_CMD(0x19)
+#define DLN2_GPIO_PIN_DEBOUNCE_ENABLE   DLN2_GPIO_CMD(0x1B)
+#define DLN2_GPIO_PIN_DEBOUNCE_DISABLE  DLN2_GPIO_CMD(0x1C)
 #define DLN2_GPIO_PIN_SET_EVENT_CFG     DLN2_GPIO_CMD(0x1E)
 #define DLN2_GPIO_PIN_PULLDOWN_ENABLE   DLN2_GPIO_CMD(0x20)
 #define DLN2_GPIO_PIN_PULLDOWN_DISABLE  DLN2_GPIO_CMD(0x21)
@@ -68,7 +70,10 @@ struct dln2_gpio_settings {
 #define FLAG_PULL_UP           3
 #define FLAG_PULL_DOWN         4
 #define FLAG_USED_AS_IRQ       5
+#define FLAG_DEBOUNCE_EN       6
     uint8_t irq_type;
+    uint32_t debounce_us;
+    absolute_time_t debounced_time;
 };
 
 struct dln2_gpio_settings settings[DLN2_GPIO_NUM_PINS];
@@ -112,6 +117,10 @@ static const char *dln2_gpio_id_to_name(uint16_t id)
         return "GPIO_PIN_PULLUP_ENABLE";
     case DLN2_GPIO_PIN_PULLUP_DISABLE:
         return "GPIO_PIN_PULLUP_DISABLE";
+    case DLN2_GPIO_PIN_DEBOUNCE_ENABLE:
+        return "GPIO_PIN_DEBOUNCE_ENABLE";
+    case DLN2_GPIO_PIN_DEBOUNCE_DISABLE:
+        return "GPIO_PIN_DEBOUNCE_DISABLE";
     case DLN2_GPIO_PIN_SET_EVENT_CFG:
         return "GPIO_PIN_SET_EVENT_CFG";
     case DLN2_GPIO_PIN_PULLDOWN_ENABLE:
@@ -193,6 +202,27 @@ static bool dln2_gpio_pin_enable(struct dln2_slot *slot, bool enable)
     return dln2_response(slot, 0);
 }
 
+static bool dln2_gpio_pin_set_debounce_cfg(struct dln2_slot *slot)
+{
+    struct {
+        uint32_t duration;
+        uint16_t pin;
+    } TU_ATTR_PACKED *cmd = dln2_slot_header_data(slot);
+
+    DLN2_VERIFY_COMMAND_SIZE(slot, sizeof(*cmd));
+
+    if (!dln2_pin_is_requested(cmd->pin, DLN2_MODULE_GPIO))
+        return dln2_response_error(slot, DLN2_RES_INVALID_PIN_NUMBER);
+
+    if (cmd->pin == LED_PIN)
+        return dln2_response_error(slot, DLN2_RES_INVALID_VALUE);
+
+    BIT_SET(settings[cmd->pin].flags, FLAG_DEBOUNCE_EN);
+    settings[cmd->pin].debounce_us = cmd->duration;
+
+    return dln2_response(slot, 0);
+}
+
 static bool dln2_gpio_pin_set_event_cfg(struct dln2_slot *slot)
 {
     struct {
@@ -266,7 +296,7 @@ bool dln2_handle_gpio(struct dln2_slot *slot)
         // The Linux driver can set the default debounce value, but it does not enable it for the pin?!
         // The DLN-2 adapter does not support debounce, but 4M and 4S do.
         LOG1("DLN2_GPIO_SET_DEBOUNCE\n");
-        return dln2_response_error(slot, DLN2_RES_COMMAND_NOT_SUPPORTED);
+        return dln2_gpio_pin_set_debounce_cfg(slot);
     case DLN2_GPIO_PIN_GET_VAL:
         DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
         val = gpio_get(pin);
@@ -331,6 +361,19 @@ bool dln2_handle_gpio(struct dln2_slot *slot)
         BIT_CLEAR(settings[pin].flags, FLAG_PULL_UP);
         gpio_set_pulls(pin, false, BIT_CHECK(settings[pin].flags, FLAG_PULL_DOWN));
         return dln2_gpio_response_pin_val(slot, pin, NULL);
+    case DLN2_GPIO_PIN_DEBOUNCE_ENABLE:
+        if (!gpio_is_dir_out(pin)) {
+            BIT_SET(settings[pin].flags, FLAG_DEBOUNCE_EN);
+        }
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
+    case DLN2_GPIO_PIN_DEBOUNCE_DISABLE:
+        DLN2_GPIO_GET_PIN_VERIFY(slot, pin, NULL);
+        if (!gpio_is_dir_out(pin)) {
+            BIT_CLEAR(settings[pin].flags, FLAG_DEBOUNCE_EN);
+            settings[pin].debounce_us = 0;
+        }
+        return dln2_gpio_response_pin_val(slot, pin, NULL);
     case DLN2_GPIO_PIN_SET_EVENT_CFG:
         return dln2_gpio_pin_set_event_cfg(slot);
     case DLN2_GPIO_PIN_PULLDOWN_ENABLE:
@@ -389,6 +432,7 @@ static bool dln2_gpio_queue_event(struct dln2_gpio_event *event)
 void dln2_gpio_task(void)
 {
     bool queued;
+    int i;
 
     do {
         queued = false;
@@ -396,7 +440,7 @@ void dln2_gpio_task(void)
 
         if (dln2_gpio_events[0].events) {
             if (dln2_gpio_queue_event(&dln2_gpio_events[0])) {
-                for (int i = 0; i < (DLN2_GPIO_MAX_EVENTS - 1); i++) {
+                for (i = 0; i < (DLN2_GPIO_MAX_EVENTS - 1); i++) {
                     dln2_gpio_events[i] = dln2_gpio_events[i + 1];
                 }
                 dln2_gpio_events[DLN2_GPIO_MAX_EVENTS - 1].events = 0;
@@ -405,6 +449,13 @@ void dln2_gpio_task(void)
         }
         restore_interrupts(ints);
     } while (queued);
+
+    for (i = 0; i < DLN2_GPIO_NUM_PINS; i++) {
+        if ((settings[i].debounced_time) && (settings[i].debounced_time < get_absolute_time())) {
+            settings[i].debounced_time = 0;
+            gpio_set_irq_enabled(i, settings[i].irq_type, true);
+        }
+    }
 }
 
 static void dln2_gpio_irq_callback(uint gpio, uint32_t events)
@@ -457,6 +508,16 @@ static void dln2_gpio_irq_callback(uint gpio, uint32_t events)
     dln2_gpio_events[i].events = events;
     dln2_gpio_events[i].value = value;
     LOG2("%u\n", value);
+
+    if ((BIT_CHECK(settings[gpio].flags, FLAG_DEBOUNCE_EN)) || (events == GPIO_IRQ_LEVEL_LOW) || (events == GPIO_IRQ_LEVEL_HIGH)) {
+        if (((events == GPIO_IRQ_LEVEL_LOW) || (events == GPIO_IRQ_LEVEL_HIGH)) && (settings[gpio].debounce_us < 500)) {
+            /* add minimum delay to prevent event storm with level irq */
+            settings[gpio].debounced_time = make_timeout_time_us(500); // todo: optimize for higher level-interrupt speeds
+        } else {
+            settings[gpio].debounced_time = make_timeout_time_us(settings[gpio].debounce_us);
+        }
+        gpio_set_irq_enabled(gpio, events, false);
+    }
 }
 
 void dln2_gpio_init(void)
